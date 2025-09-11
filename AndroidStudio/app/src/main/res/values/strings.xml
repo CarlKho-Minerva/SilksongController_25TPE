@@ -3,4 +3,10 @@
     <string name="enter_mac_ip_address">Enter Mac IP Address</string>
     <string name="start_button_text">Start</string>
     <string name="status_disconnected">Status: Disconnected</string>
+    <string name="start_button">Start</string>
+    <string name="stop_button">Stop</string>
+    <string name="enter_ip_message">Status: Please enter an IP address.</string>
+    <string name="network_error_message">Status: Invalid IP or network error.</string>
+    <string name="disconnected_status">Status: Disconnected</string>
+    <string name="running_status_format">Status: Running\n\nX: %1$s\nY: %2$s\nZ: %3$s</string>
 </resources>

@@ -7,28 +7,39 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import kotlinx.coroutines.*
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.util.Locale
 
 // MainActivity now implements SensorEventListener to listen to sensor data. [1]
 class MainActivity : AppCompatActivity(), SensorEventListener {
 
-    // Declare variables for the sensor system.
-    private lateinit var sensorManager: SensorManager
-    private var accelerometer: Sensor? = null
-
-    // Declare variables for our UI elements.
-    // 'lateinit' means we promise to initialize them before using them.
+    // --- UI and Sensor Variables ---
     private lateinit var ipAddressEditText: EditText
     private lateinit var controlButton: Button
     private lateinit var statusTextView: TextView
-
-    // A variable to track the current state of the controller.
+    private lateinit var sensorManager: SensorManager
+    private var accelerometer: Sensor? = null
     private var isStarted = false
+
+    // --- Networking and Coroutine Variables ---
+    private val coroutineScope = CoroutineScope(Dispatchers.IO) // Scope for background tasks. [1]
+    private var udpSocket: DatagramSocket? = null
+    private var targetAddress: InetAddress? = null
+    private val targetPort = 12345 // The port our Python script will listen on.
+
+    // --- Throttling Variables ---
+    private var lastSendTime: Long = 0
+    private val sendIntervalMs: Long = 30 // Send data roughly 33 times a second.
 
     // This function is called when the activity is first created. [2]
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,34 +66,96 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         // Set a listener that executes code when the controlButton is clicked. [4]
         controlButton.setOnClickListener {
             if (!isStarted) {
-                // This block runs when the button is clicked and we are in the "Stopped" state.
-                isStarted = true
-                controlButton.text = "Stop" // Change button text.
-                // Register the sensor listener when the controller starts. [3]
-                accelerometer?.also { accel ->
-                    sensorManager.registerListener(this, accel, SensorManager.SENSOR_DELAY_GAME)
+                val ipAddressStr = ipAddressEditText.text.toString()
+                if (ipAddressStr.isBlank()) {
+                    statusTextView.text = getString(R.string.enter_ip_message)
+                    return@setOnClickListener
                 }
+                startController(ipAddressStr) // Start the controller logic.
             } else {
-                // This block runs when the button is clicked and we are in the "Started" state.
-                isStarted = false
-                controlButton.text = "Start" // Change button text.
-                // Unregister the listener when the controller stops to save battery. [3]
-                sensorManager.unregisterListener(this)
-                statusTextView.text = "Status: Disconnected" // Reset status text.
+                stopController() // Stop the controller logic.
             }
+        }
+    }
+
+    private fun startController(ipAddressStr: String) {
+        coroutineScope.launch { // Launch a background task. [1]
+            try {
+                Log.d("UDP", "Attempting to connect to: $ipAddressStr:$targetPort")
+                targetAddress = InetAddress.getByName(ipAddressStr)
+                udpSocket = DatagramSocket() // Create the UDP socket. [2]
+                isStarted = true
+                Log.d("UDP", "UDP socket created successfully")
+                runOnUiThread { // UI updates must happen on the main thread.
+                    controlButton.text = getString(R.string.stop_button)
+                    ipAddressEditText.isEnabled = false // Disable IP field while running.
+                }
+                accelerometer?.also { accel ->
+                    sensorManager.registerListener(this@MainActivity, accel, SensorManager.SENSOR_DELAY_GAME)
+                    Log.d("UDP", "Sensor listener registered")
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Log.e("UDP", "Error starting controller: ${e.message}")
+                runOnUiThread { statusTextView.text = getString(R.string.network_error_message) }
+            }
+        }
+    }
+
+    private fun stopController() {
+        isStarted = false
+        sensorManager.unregisterListener(this)
+        coroutineScope.launch {
+            udpSocket?.close() // Close the socket. [2]
+            udpSocket = null
+        }
+        runOnUiThread {
+            controlButton.text = getString(R.string.start_button)
+            statusTextView.text = getString(R.string.disconnected_status)
+            ipAddressEditText.isEnabled = true
         }
     }
 
     // This function is called every time the sensor provides a new reading. [4]
     override fun onSensorChanged(event: SensorEvent?) {
-        if (event?.sensor?.type == Sensor.TYPE_ACCELEROMETER) {
+        if (!isStarted || event?.sensor?.type != Sensor.TYPE_ACCELEROMETER) return
+
+        val currentTime = System.currentTimeMillis()
+        if ((currentTime - lastSendTime) > sendIntervalMs) { // Throttling check.
+            lastSendTime = currentTime
+
             val xAxis = event.values[0]
             val yAxis = event.values[1]
             val zAxis = event.values[2]
 
-            // Update the status text view with the raw sensor data.
-            // We use String.format to neatly format the floating point numbers.
-            statusTextView.text = "Status: Running\n\nX: ${String.format("%.2f", xAxis)}\nY: ${String.format("%.2f", yAxis)}\nZ: ${String.format("%.2f", zAxis)}"
+            // Format the data into a simple string.
+            val message = "SENSOR:${String.format(Locale.US, "%.3f", xAxis)},${String.format(Locale.US, "%.3f", yAxis)},${String.format(Locale.US, "%.3f", zAxis)}"
+
+            // Send the message in a new background task.
+            coroutineScope.launch {
+                sendUdpMessage(message)
+            }
+
+            runOnUiThread {
+                val statusMessage = getString(R.string.running_status_format,
+                    String.format(Locale.US, "%.2f", xAxis),
+                    String.format(Locale.US, "%.2f", yAxis),
+                    String.format(Locale.US, "%.2f", zAxis))
+                statusTextView.text = statusMessage
+            }
+        }
+    }
+
+    private fun sendUdpMessage(message: String) {
+        udpSocket?.let { socket ->
+            try {
+                val buffer = message.toByteArray()
+                val packet = DatagramPacket(buffer, buffer.size, targetAddress, targetPort)
+                socket.send(packet) // Send the data packet. [3]
+                Log.d("UDP", "Sent: $message")
+            } catch (e: Exception) {
+                Log.e("UDP", "Error sending packet: ${e.message}", e)
+            }
         }
     }
 
@@ -95,17 +168,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     override fun onPause() {
         super.onPause()
         if (isStarted) {
-            sensorManager.unregisterListener(this)
+            stopController()
         }
     }
 
     // And re-register it when the app resumes, if it was started before. [5]
     override fun onResume() {
         super.onResume()
-        if (isStarted) {
-            accelerometer?.also { accel ->
-                sensorManager.registerListener(this, accel, SensorManager.SENSOR_DELAY_GAME)
-            }
-        }
+        // The controller will be restarted manually by the user if needed
     }
 }
