@@ -5,6 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.util.Log
@@ -94,6 +95,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 runOnUiThread { // UI updates must happen on the main thread.
                     controlButton.text = getString(R.string.stop_button)
                     ipAddressEditText.isEnabled = false // Disable IP field while running.
+                    
+                    // ADD THIS LINE: Keep the screen on to prevent phone from sleeping
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
                 accelerometer?.also { accel ->
                     sensorManager.registerListener(this@MainActivity, accel, SensorManager.SENSOR_DELAY_GAME)
@@ -122,6 +126,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             controlButton.text = getString(R.string.start_button)
             statusTextView.text = getString(R.string.disconnected_status)
             ipAddressEditText.isEnabled = true
+            
+            // ADD THIS LINE: Allow the screen to sleep again when stopped
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 

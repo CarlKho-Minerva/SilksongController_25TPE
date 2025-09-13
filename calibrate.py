@@ -5,82 +5,70 @@ import statistics
 HOST_IP = '0.0.0.0'
 PORT = 12345
 
-def record_gesture(gesture_name, num_samples=5):
-    """Guides the user to record a gesture and finds the average peak value."""
-    print(f"\n--- Calibrating: {gesture_name} ---")
-    input(f"Get ready to perform '{gesture_name}' {num_samples} times. Press Enter to start...")
-    
-    samples = []
+def get_gesture_data(duration=3):
+    """Listens for sensor data for a fixed duration and returns all readings."""
+    readings = []
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.bind((HOST_IP, PORT))
+        s.settimeout(0.1) # Don't block forever
         
-        for i in range(num_samples):
-            print(f"  Recording sample {i+1}/{num_samples}... Perform the gesture NOW.")
-            
-            peak_x = 0
-            peak_y = 0
+        print("  Recording...")
+        start_time = time.time()
+        while time.time() - start_time < duration:
+            try:
+                data, _ = s.recvfrom(1024)
+                message = data.decode().strip()
+                if message.startswith("SENSOR:"):
+                    parts = message.replace("SENSOR:", "").split(',')
+                    if len(parts) >= 4:
+                        readings.append([float(p) for p in parts])
+            except socket.timeout:
+                continue
+    print(f"  Recorded {len(readings)} data points.")
+    return readings
 
-            start_time = time.time()
-            while time.time() - start_time < 2: # Record for 2 seconds
-                try:
-                    data, _ = s.recvfrom(1024)
-                    message = data.decode().strip()
-                    if message.startswith("SENSOR:"):
-                        parts = message.replace("SENSOR:", "").split(',')
-                        if len(parts) >= 3:  # Handle both 3 and 4 value formats
-                            x = float(parts[0])
-                            y = float(parts[1])
-                            if abs(x) > peak_x: peak_x = abs(x)
-                            if abs(y) > peak_y: peak_y = abs(y)
-                except socket.timeout:
-                    continue
-                except Exception as e:
-                    print(f"  Error reading data: {e}")
-                    continue
-            
-            if gesture_name == "PUNCH":
-                samples.append(peak_x)
-                print(f"  Peak X-Force recorded: {peak_x:.2f}")
-            elif gesture_name == "JUMP":
-                samples.append(peak_y)
-                print(f"  Peak Y-Force recorded: {peak_y:.2f}")
+def calibrate_punch():
+    input("\n--- Calibrating PUNCH (Vertical Stance) ---\nHold phone vertically. Press Enter, then perform 5 punches...")
+    data = get_gesture_data(10) # 10 seconds to do 5 punches
+    x_peaks = [abs(row[0]) for row in data if abs(row[1]) > 9.0] # Only consider data when phone is vertical
+    x_peaks.sort(reverse=True)
+    threshold = statistics.mean(x_peaks[:5]) * 0.8 # Average of top 5 peaks
+    return threshold
 
-            time.sleep(1) # Cooldown between samples
+def calibrate_jump():
+    input("\n--- Calibrating JUMP (Horizontal Stance) ---\nHold phone horizontally. Press Enter, then perform 5 jumps...")
+    data = get_gesture_data(10)
+    x_peaks = [abs(row[0]) for row in data if abs(row[0]) > 9.0] # Only consider vertical G-force in horizontal state
+    x_peaks.sort(reverse=True)
+    threshold = statistics.mean(x_peaks[:5]) * 0.8
+    return threshold
 
-    # Calculate 80% of the average value for a reliable threshold
-    if samples:
-        avg_value = statistics.mean(samples)
-        threshold = avg_value * 0.8
-        print(f"--- Calibration for {gesture_name} complete! ---")
-        return threshold
-    else:
-        print(f"--- No data recorded for {gesture_name}! ---")
-        return 5.0 if gesture_name == "PUNCH" else 15.0  # Default values
+def calibrate_walk():
+    input("\n--- Calibrating WALK (Horizontal Stance) ---\nHold phone horizontally and walk in place. Press Enter to start...")
+    data = get_gesture_data(10)
+    z_values = [row[2] for row in data]
+    gyro_y_values = [abs(row[3]) for row in data]
+    
+    amplitude = (max(z_values) - min(z_values)) / 2
+    gyro_noise = statistics.mean(gyro_y_values) * 1.5 # 150% of average noise
+    
+    return amplitude, gyro_noise
 
 if __name__ == "__main__":
-    print("✅ Gesture Calibration Script")
-    print("="*50)
-    print("This script will help you calibrate your personal gesture thresholds.")
+    print("✅ Full Motion Profile Calibration")
     print("Make sure your Android app is running and connected!")
-    print("="*50)
     
-    try:
-        punch_threshold = record_gesture("PUNCH")
-        jump_threshold = record_gesture("JUMP")
+    punch_thresh = calibrate_punch()
+    jump_thresh = calibrate_jump()
+    walk_amp, walk_gyro_noise = calibrate_walk()
 
-        print("\n\n✅ Calibration Complete! ✅")
-        print("Copy the following lines into your 'udp_listener.py' script:")
-        print("--------------------------------------------------")
-        print(f"PUNCH_THRESHOLD = {punch_threshold:.2f}")
-        print(f"JUMP_THRESHOLD = {jump_threshold:.2f}")
-        print("--------------------------------------------------")
-        print("\nInstructions:")
-        print("1. Copy the lines above")
-        print("2. Open udp_listener.py")
-        print("3. Replace the existing PUNCH_THRESHOLD and JUMP_THRESHOLD values")
-        print("4. Save the file and run the controller!")
-        
-    except KeyboardInterrupt:
-        print("\n\nCalibration cancelled by user.")
-    except Exception as e:
-        print(f"\nError during calibration: {e}")
+    print("\n\n✅ Calibration Complete! ✅")
+    print("Copy the entire 'CALIBRATION_PROFILE' dictionary into your 'udp_listener.py' script:")
+    print("--------------------------------------------------")
+    print("CALIBRATION_PROFILE = {")
+    print(f"    'PUNCH_THRESHOLD': {punch_thresh:.2f},")
+    print(f"    'JUMP_THRESHOLD': {jump_thresh:.2f},")
+    print(f"    'WALK_SWING_AMPLITUDE': {walk_amp:.2f},")
+    print(f"    'WALK_GYRO_NOISE_LIMIT': {walk_gyro_noise:.2f},")
+    print("}")
+    print("--------------------------------------------------")
