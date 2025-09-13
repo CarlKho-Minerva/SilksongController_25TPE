@@ -29,13 +29,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var statusTextView: TextView
     private lateinit var sensorManager: SensorManager
     private var accelerometer: Sensor? = null
+    private var gyroscope: Sensor? = null
     private var isStarted = false
+    
+    // Store the latest gyroscope data
+    private var gyroData = FloatArray(3)
 
     // --- Networking and Coroutine Variables ---
     private val coroutineScope = CoroutineScope(Dispatchers.IO) // Scope for background tasks. [1]
     private var udpSocket: DatagramSocket? = null
     private var targetAddress: InetAddress? = null
-    private val targetPort = 12345 // The port our Python script will listen on.
+    private val TARGET_PORT = 12345 // The port our Python script will listen on.
 
     // --- Throttling Variables ---
     private var lastSendTime: Long = 0
@@ -59,9 +63,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         controlButton = findViewById(R.id.controlButton)
         statusTextView = findViewById(R.id.statusTextView)
 
-        // Initialize the SensorManager and get the accelerometer. [2]
+        // Initialize the SensorManager and get the accelerometer and gyroscope. [2]
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
 
         // Set a listener that executes code when the controlButton is clicked. [4]
         controlButton.setOnClickListener {
@@ -81,7 +86,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private fun startController(ipAddressStr: String) {
         coroutineScope.launch { // Launch a background task. [1]
             try {
-                Log.d("UDP", "Attempting to connect to: $ipAddressStr:$targetPort")
+                Log.d("UDP", "Attempting to connect to: $ipAddressStr:$TARGET_PORT")
                 targetAddress = InetAddress.getByName(ipAddressStr)
                 udpSocket = DatagramSocket() // Create the UDP socket. [2]
                 isStarted = true
@@ -92,7 +97,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 }
                 accelerometer?.also { accel ->
                     sensorManager.registerListener(this@MainActivity, accel, SensorManager.SENSOR_DELAY_GAME)
-                    Log.d("UDP", "Sensor listener registered")
+                    Log.d("UDP", "Accelerometer listener registered")
+                }
+                gyroscope?.also { gyro ->
+                    sensorManager.registerListener(this@MainActivity, gyro, SensorManager.SENSOR_DELAY_GAME)
+                    Log.d("UDP", "Gyroscope listener registered")
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -118,30 +127,39 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     // This function is called every time the sensor provides a new reading. [4]
     override fun onSensorChanged(event: SensorEvent?) {
-        if (!isStarted || event?.sensor?.type != Sensor.TYPE_ACCELEROMETER) return
+        if (!isStarted || event == null) return
 
-        val currentTime = System.currentTimeMillis()
-        if ((currentTime - lastSendTime) > sendIntervalMs) { // Throttling check.
-            lastSendTime = currentTime
+        when (event.sensor.type) {
+            Sensor.TYPE_ACCELEROMETER -> {
+                val currentTime = System.currentTimeMillis()
+                if ((currentTime - lastSendTime) > sendIntervalMs) { // Throttling check.
+                    lastSendTime = currentTime
 
-            val xAxis = event.values[0]
-            val yAxis = event.values[1]
-            val zAxis = event.values[2]
+                    val xAxis = event.values[0]
+                    val yAxis = event.values[1]
+                    val zAxis = event.values[2]
+                    val gyroY = gyroData[1] // Y-axis rotation (yaw)
 
-            // Format the data into a simple string.
-            val message = "SENSOR:${String.format(Locale.US, "%.3f", xAxis)},${String.format(Locale.US, "%.3f", yAxis)},${String.format(Locale.US, "%.3f", zAxis)}"
+                    // NEW MESSAGE FORMAT with gyroscope data
+                    val message = "SENSOR:${String.format(Locale.US, "%.3f", xAxis)},${String.format(Locale.US, "%.3f", yAxis)},${String.format(Locale.US, "%.3f", zAxis)},${String.format(Locale.US, "%.3f", gyroY)}"
 
-            // Send the message in a new background task.
-            coroutineScope.launch {
-                sendUdpMessage(message)
+                    // Send the message in a new background task.
+                    coroutineScope.launch {
+                        sendUdpMessage(message)
+                    }
+
+                    runOnUiThread {
+                        val statusMessage = getString(R.string.running_status_format,
+                            String.format(Locale.US, "%.2f", xAxis),
+                            String.format(Locale.US, "%.2f", yAxis),
+                            String.format(Locale.US, "%.2f", zAxis))
+                        statusTextView.text = statusMessage
+                    }
+                }
             }
-
-            runOnUiThread {
-                val statusMessage = getString(R.string.running_status_format,
-                    String.format(Locale.US, "%.2f", xAxis),
-                    String.format(Locale.US, "%.2f", yAxis),
-                    String.format(Locale.US, "%.2f", zAxis))
-                statusTextView.text = statusMessage
+            Sensor.TYPE_GYROSCOPE -> {
+                // Store the latest gyroscope data
+                System.arraycopy(event.values, 0, gyroData, 0, 3)
             }
         }
     }
@@ -150,7 +168,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         udpSocket?.let { socket ->
             try {
                 val buffer = message.toByteArray()
-                val packet = DatagramPacket(buffer, buffer.size, targetAddress, targetPort)
+                val packet = DatagramPacket(buffer, buffer.size, targetAddress, TARGET_PORT)
                 socket.send(packet) // Send the data packet. [3]
                 Log.d("UDP", "Sent: $message")
             } catch (e: Exception) {

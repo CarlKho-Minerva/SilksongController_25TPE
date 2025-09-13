@@ -1,113 +1,128 @@
 import socket
-import math
 import time
-from collections import deque # A special list that is efficient for adding/removing from both ends
-
-# This library allows our script to press keys
 from pynput.keyboard import Controller, Key
 
-# --- Configuration ---
+# --- Configuration (UPDATE THESE VALUES FROM CALIBRATE.PY) ---
+PUNCH_THRESHOLD = 5.0  # Default value, update this!
+JUMP_THRESHOLD = 15.0  # Default value, update this!
+# -----------------------------------------------------------
+
 HOST_IP = '0.0.0.0'
 PORT = 12345
+GRAVITY_THRESHOLD = 9.0
 
-# --- Gesture Tuning ---
-# A forward punch is a strong negative Z acceleration.
-PUNCH_THRESHOLD = 20.0
-JUMP_THRESHOLD = 15.0
-
-# --- Rhythmic Walking Tuning (Now on Z-axis) ---
-# A buffer to store the history of Z-axis acceleration values (forward/backward swing)
-SWING_HISTORY = deque(maxlen=20) # Store roughly 2/3 of a second of data
-# The value must swing above/below this threshold to count
-SWING_AMPLITUDE_THRESHOLD = 2.5
-# How many times the value must cross zero in the history to start walking
-SWING_CROSSING_THRESHOLD = 3
-
-# Cooldowns in seconds
-PUNCH_COOLDOWN_S = 0.5
-JUMP_COOLDOWN_S = 0.5
-# ---------------------
-
-# Create a keyboard controller object
 keyboard = Controller()
+last_action_time = 0
+action_cooldown = 0.3
 
-# State tracking variables
-last_punch_time = 0
-last_jump_time = 0
+# State tracking
+facing_right = True
 is_walking = False
+total_rotation = 0.0
+last_time = time.time()
 
-print(f"✅ Ready Stance Controller is running.")
-print(f"Hold phone vertically, like a fist, screen facing left.")
-print(f"--------------------------------------------------")
-print(f"Gestures:")
-print(f"  • Swing Forward/Back: Walk (Right Arrow key)")
-print(f"  • Punch Forward:      Attack (X key)")
-print(f"  • Jerk Upward:        Jump (Spacebar)")
-print("--------------------------------------------------")
+print("✅ State-Aware Controller is running.")
+print("="*50)
+print("STANCE 1: Walking/Jumping (Horizontal)")
+print("  • Hold phone horizontally, screen facing your body")
+print("  • Walk: Natural pendulum swing")
+print("  • Jump: Sharp upward jerk (only works in walking stance)")
+print("  • Turn: Rotate your body 180 degrees")
+print("")
+print("STANCE 2: Attacking (Vertical)")
+print("  • Hold phone vertically, screen facing left")
+print("  • Attack: Forward punch motion")
+print("="*50)
+print("Waiting for sensor data...")
 
-def handle_rhythmic_walking(z_value):
-    """Detects a rhythmic FORWARD/BACKWARD swing and holds the 'right' arrow key."""
-    global is_walking, SWING_HISTORY
-
-    SWING_HISTORY.append(z_value)
-    if len(SWING_HISTORY) < SWING_HISTORY.maxlen:
-        return
-
-    # --- Detect the start of a swing ---
-    if not is_walking:
-        zero_crossings = 0
-        if max(SWING_HISTORY) > SWING_AMPLITUDE_THRESHOLD and min(SWING_HISTORY) < -SWING_AMPLITUDE_THRESHOLD:
-            for i in range(1, len(SWING_HISTORY)):
-                if (SWING_HISTORY[i-1] > 0 and SWING_HISTORY[i] < 0) or \
-                   (SWING_HISTORY[i-1] < 0 and SWING_HISTORY[i] > 0):
-                    zero_crossings += 1
-
-        if zero_crossings >= SWING_CROSSING_THRESHOLD:
-            print(f"SWING DETECTED! (Crossings: {zero_crossings}) -> Walking Right")
-            keyboard.press(Key.right)
-            is_walking = True
-
-    # --- Detect the end of a swing ---
-    else:
-        if max(SWING_HISTORY) < SWING_AMPLITUDE_THRESHOLD and min(SWING_HISTORY) > -SWING_AMPLITUDE_THRESHOLD:
-            print("Swing stopped. -> Halting walk.")
-            keyboard.release(Key.right)
-            is_walking = False
-            SWING_HISTORY.clear()
-
-# --- Main Program ---
 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
     s.bind((HOST_IP, PORT))
-
     while True:
-        data, addr = s.recvfrom(1024)
-        message = data.decode().strip()
+        try:
+            data, _ = s.recvfrom(1024)
+            message = data.decode().strip()
 
-        if message.startswith("SENSOR:"):
-            try:
-                parts = message.replace("SENSOR:", "").split(',')
-                x = float(parts[0])
-                y = float(parts[1])
-                z = float(parts[2])
-                current_time = time.time()
+            if message.startswith("SENSOR:"):
+                try:
+                    parts = message.replace("SENSOR:", "").split(',')
+                    if len(parts) >= 4:
+                        x, y, z, gyro_y = [float(p) for p in parts]
+                    else:
+                        # Fallback for old 3-value format
+                        x, y, z = [float(p) for p in parts]
+                        gyro_y = 0.0
+                    
+                    current_time = time.time()
+                    delta_time = current_time - last_time
+                    last_time = current_time
 
-                # PUNCH DETECTION (strong forward thrust = negative Z)
-                if z < -PUNCH_THRESHOLD and (current_time - last_punch_time) > PUNCH_COOLDOWN_S:
-                    print(f"PUNCH DETECTED! (Z-axis: {z:.2f}) -> Pressing 'x'")
-                    keyboard.press('x')
-                    keyboard.release('x')
-                    last_punch_time = current_time
+                    # --- State Detection ---
+                    state = None
+                    if abs(x) > GRAVITY_THRESHOLD:
+                        state = "WALKING"
+                    elif abs(y) > GRAVITY_THRESHOLD:
+                        state = "COMBAT"
 
-                # JUMP DETECTION (strong upward jerk = positive Y)
-                elif y > JUMP_THRESHOLD and (current_time - last_jump_time) > JUMP_COOLDOWN_S:
-                    print(f"JUMP DETECTED! (Y-axis: {y:.2f}) -> Pressing SPACE")
-                    keyboard.press('z')
-                    keyboard.release('z')
-                    last_jump_time = current_time
+                    # --- Rotation Tracking ---
+                    total_rotation += gyro_y * delta_time
+                    if abs(total_rotation) > 3.14: # ~180 degrees
+                        facing_right = not facing_right
+                        direction = "RIGHT" if facing_right else "LEFT"
+                        print(f"🔄 TURN DETECTED! Now facing {direction}")
+                        total_rotation = 0.0
+                        last_action_time = current_time
 
-                # WALKING DETECTION (rhythmic forward/backward swing on Z axis)
-                else:
-                    handle_rhythmic_walking(z)
+                    # Cooldown check
+                    if current_time - last_action_time < action_cooldown:
+                        continue
 
-            except (ValueError, IndexError):
-                pass
+                    # --- Execute Logic Based on State ---
+                    if state == "WALKING":
+                        if not is_walking:
+                            walk_key = Key.right if facing_right else Key.left
+                            direction = "RIGHT" if facing_right else "LEFT"
+                            print(f"🚶 WALKING START (Facing {direction})")
+                            keyboard.press(walk_key)
+                            is_walking = True
+                        
+                        # JUMP (only allowed while walking)
+                        if y > JUMP_THRESHOLD:
+                            print(f"⬆️  JUMP DETECTED (Y-Force: {y:.2f})")
+                            keyboard.press(Key.space)
+                            keyboard.release(Key.space)
+                            last_action_time = current_time
+
+                    elif state == "COMBAT":
+                        if is_walking:
+                            print("🛑 WALKING STOP (Entering combat stance)")
+                            keyboard.release(Key.right)
+                            keyboard.release(Key.left)
+                            is_walking = False
+
+                        # PUNCH (X-force while Y feels gravity)
+                        if abs(x) > PUNCH_THRESHOLD:
+                            print(f"👊 PUNCH DETECTED (X-Force: {x:.2f})")
+                            keyboard.press('x')
+                            keyboard.release('x')
+                            last_action_time = current_time
+
+                    else: # In-between states (e.g., transitions)
+                        if is_walking:
+                            print("🛑 WALKING STOP (No clear orientation)")
+                            keyboard.release(Key.right)
+                            keyboard.release(Key.left)
+                            is_walking = False
+                
+                except (ValueError, IndexError) as e:
+                    # Skip malformed messages
+                    continue
+                    
+        except KeyboardInterrupt:
+            print("\n🛑 Controller stopped by user.")
+            if is_walking:
+                keyboard.release(Key.right)
+                keyboard.release(Key.left)
+            break
+        except Exception as e:
+            print(f"Error: {e}")
+            continue
