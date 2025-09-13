@@ -3,8 +3,8 @@ import time
 from pynput.keyboard import Controller, Key
 
 # --- Configuration (UPDATE THESE VALUES FROM CALIBRATE.PY) ---
-PUNCH_THRESHOLD = 5.0  # Default value, update this!
-JUMP_THRESHOLD = 15.0  # Default value, update this!
+PUNCH_THRESHOLD = 16.33  # Default value, update this!
+JUMP_THRESHOLD = 3.73    # Default value, update this!
 # -----------------------------------------------------------
 
 HOST_IP = '0.0.0.0'
@@ -53,7 +53,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                         # Fallback for old 3-value format
                         x, y, z = [float(p) for p in parts]
                         gyro_y = 0.0
-                    
+
                     current_time = time.time()
                     delta_time = current_time - last_time
                     last_time = current_time
@@ -61,12 +61,12 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                     # --- State Detection with Stability ---
                     # Use a more sophisticated approach that considers recent readings
                     # and doesn't change state based on temporary gesture spikes
-                    
+
                     # Add current reading to buffer (keep last 5 readings)
                     state_samples.append((x, y))
                     if len(state_samples) > 5:
                         state_samples.pop(0)
-                    
+
                     # Calculate average gravity readings (ignoring extreme spikes)
                     if len(state_samples) >= 3:
                         # Remove the highest and lowest to filter spikes
@@ -77,7 +77,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                         # Use middle values
                         avg_x = sum(x_values[1:-1]) / max(1, len(x_values) - 2)
                         avg_y = sum(y_values[1:-1]) / max(1, len(y_values) - 2)
-                        
+
                         # Determine state based on stable gravity readings
                         if avg_x > 8.0 and avg_x > avg_y + 2.0:
                             new_state = "WALKING"
@@ -85,12 +85,12 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                             new_state = "COMBAT"
                         else:
                             new_state = current_state  # Keep current state if unclear
-                        
+
                         # Only change state if we have a clear reading or no current state
                         if current_state is None or new_state != current_state:
                             if new_state in ["WALKING", "COMBAT"]:
                                 current_state = new_state
-                        
+
                         state = current_state
                     else:
                         state = current_state  # Keep current state until we have enough samples
@@ -116,7 +116,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                             print(f"🚶 WALKING START (Facing {direction})")
                             keyboard.press(walk_key)
                             is_walking = True
-                        
+
                         # JUMP (only allowed while walking)
                         if y > JUMP_THRESHOLD:
                             print(f"⬆️  JUMP DETECTED (Y-Force: {y:.2f})")
@@ -144,11 +144,11 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                             keyboard.release(Key.right)
                             keyboard.release(Key.left)
                             is_walking = False
-                
+
                 except (ValueError, IndexError) as e:
                     # Skip malformed messages
                     continue
-                    
+
         except KeyboardInterrupt:
             print("\n🛑 Controller stopped by user.")
             if is_walking:
