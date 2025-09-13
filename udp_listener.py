@@ -1,6 +1,7 @@
 import socket
-import math # We need this for the square root function
-import time # We need this to manage the cooldown
+import math
+import time
+from collections import deque # A special list that is efficient for adding/removing from both ends
 
 # This library allows our script to press keys
 from pynput.keyboard import Controller, Key
@@ -10,24 +11,21 @@ HOST_IP = '0.0.0.0'
 PORT = 12345
 
 # --- Gesture Tuning ---
-# The force required to register a punch. You WILL need to adjust this!
-PUNCH_THRESHOLD = 25.0
+# A forward punch is a strong negative Z acceleration.
+PUNCH_THRESHOLD = 20.0
+JUMP_THRESHOLD = 15.0
 
-# Walking thresholds (tilt detection)
-WALK_THRESHOLD = 3.0  # X-axis tilt to start walking
-WALK_STOP_THRESHOLD = 1.5  # X-axis tilt to stop walking
-
-# Jump threshold (upward acceleration)
-JUMP_THRESHOLD = 15.0  # Y-axis spike for jumping
-
-# Turn around threshold (quick direction change)
-TURN_THRESHOLD = 8.0  # How much X-axis must change quickly
-TURN_TIME_WINDOW = 0.3  # Time window to detect direction change
+# --- Rhythmic Walking Tuning (Now on Z-axis) ---
+# A buffer to store the history of Z-axis acceleration values (forward/backward swing)
+SWING_HISTORY = deque(maxlen=20) # Store roughly 2/3 of a second of data
+# The value must swing above/below this threshold to count
+SWING_AMPLITUDE_THRESHOLD = 2.5
+# How many times the value must cross zero in the history to start walking
+SWING_CROSSING_THRESHOLD = 3
 
 # Cooldowns in seconds
 PUNCH_COOLDOWN_S = 0.5
-JUMP_COOLDOWN_S = 0.3
-TURN_COOLDOWN_S = 0.8
+JUMP_COOLDOWN_S = 0.5
 # ---------------------
 
 # Create a keyboard controller object
@@ -36,113 +34,46 @@ keyboard = Controller()
 # State tracking variables
 last_punch_time = 0
 last_jump_time = 0
-last_turn_time = 0
-
-# Walking state
 is_walking = False
-walking_direction = None  # 'left' or 'right'
 
-# Character facing direction (True = right, False = left)
-facing_right = True
-
-# Turn detection variables
-recent_x_values = []  # Store recent X values for turn detection
-MAX_RECENT_VALUES = 10
-
-def detect_turn_around(x_value):
-    """Detect if user is doing a quick turn-around gesture"""
-    global recent_x_values, last_turn_time, facing_right
-
-    current_time = time.time()
-    if (current_time - last_turn_time) < TURN_COOLDOWN_S:
-        return False
-
-    # Add current X value to recent values
-    recent_x_values.append(x_value)
-    if len(recent_x_values) > MAX_RECENT_VALUES:
-        recent_x_values.pop(0)
-
-    # Need at least 5 values to detect turn
-    if len(recent_x_values) < 5:
-        return False
-
-    # Check for rapid direction change
-    min_x = min(recent_x_values[-5:])
-    max_x = max(recent_x_values[-5:])
-
-    # If there's a big swing in X-axis quickly, it's a turn
-    if abs(max_x - min_x) > TURN_THRESHOLD:
-        print(f"TURN AROUND DETECTED! (X swing: {max_x:.1f} to {min_x:.1f})")
-
-        # Toggle facing direction
-        facing_right = not facing_right
-        direction_str = "RIGHT" if facing_right else "LEFT"
-        print(f"Now facing: {direction_str}")
-
-        # Press the opposite direction briefly to turn around
-        turn_key = Key.left if facing_right else Key.right
-        keyboard.press(turn_key)
-        time.sleep(0.1)  # Brief press
-        keyboard.release(turn_key)
-
-        last_turn_time = current_time
-        return True
-
-    return False
-
-def handle_walking(x_value):
-    """Handle walking based on phone tilt"""
-    global is_walking, walking_direction
-
-    # Determine desired walking direction based on tilt
-    if abs(x_value) < WALK_STOP_THRESHOLD:
-        # Not tilted enough - stop walking
-        if is_walking:
-            # Release the current walking key
-            release_key = Key.right if walking_direction == 'right' else Key.left
-            keyboard.release(release_key)
-            print(f"STOP WALKING")
-            is_walking = False
-            walking_direction = None
-
-    elif x_value > WALK_THRESHOLD:
-        # Tilted right - walk right
-        new_direction = 'right'
-        if not is_walking or walking_direction != new_direction:
-            # Stop previous walking if different direction
-            if is_walking and walking_direction != new_direction:
-                old_key = Key.left if walking_direction == 'left' else Key.right
-                keyboard.release(old_key)
-
-            # Start walking right
-            keyboard.press(Key.right)
-            print(f"WALKING RIGHT (X tilt: {x_value:.2f})")
-            is_walking = True
-            walking_direction = new_direction
-
-    elif x_value < -WALK_THRESHOLD:
-        # Tilted left - walk left
-        new_direction = 'left'
-        if not is_walking or walking_direction != new_direction:
-            # Stop previous walking if different direction
-            if is_walking and walking_direction != new_direction:
-                old_key = Key.right if walking_direction == 'right' else Key.left
-                keyboard.release(old_key)
-
-            # Start walking left
-            keyboard.press(Key.left)
-            print(f"WALKING LEFT (X tilt: {x_value:.2f})")
-            is_walking = True
-            walking_direction = new_direction
-
-print(f"✅ Enhanced Silksong Controller is running.")
-print(f"Listening for motion data on port {PORT}...")
+print(f"✅ Ready Stance Controller is running.")
+print(f"Hold phone vertically, like a fist, screen facing left.")
+print(f"--------------------------------------------------")
 print(f"Gestures:")
-print(f"  • Punch Forward: Attack (X key)")
-print(f"  • Tilt Left/Right: Walk (Arrow keys)")
-print(f"  • Quick Flip: Turn Around")
-print(f"  • Jerk Up: Jump (Spacebar)")
+print(f"  • Swing Forward/Back: Walk (Right Arrow key)")
+print(f"  • Punch Forward:      Attack (X key)")
+print(f"  • Jerk Upward:        Jump (Spacebar)")
 print("--------------------------------------------------")
+
+def handle_rhythmic_walking(z_value):
+    """Detects a rhythmic FORWARD/BACKWARD swing and holds the 'right' arrow key."""
+    global is_walking, SWING_HISTORY
+
+    SWING_HISTORY.append(z_value)
+    if len(SWING_HISTORY) < SWING_HISTORY.maxlen:
+        return
+
+    # --- Detect the start of a swing ---
+    if not is_walking:
+        zero_crossings = 0
+        if max(SWING_HISTORY) > SWING_AMPLITUDE_THRESHOLD and min(SWING_HISTORY) < -SWING_AMPLITUDE_THRESHOLD:
+            for i in range(1, len(SWING_HISTORY)):
+                if (SWING_HISTORY[i-1] > 0 and SWING_HISTORY[i] < 0) or \
+                   (SWING_HISTORY[i-1] < 0 and SWING_HISTORY[i] > 0):
+                    zero_crossings += 1
+
+        if zero_crossings >= SWING_CROSSING_THRESHOLD:
+            print(f"SWING DETECTED! (Crossings: {zero_crossings}) -> Walking Right")
+            keyboard.press(Key.right)
+            is_walking = True
+
+    # --- Detect the end of a swing ---
+    else:
+        if max(SWING_HISTORY) < SWING_AMPLITUDE_THRESHOLD and min(SWING_HISTORY) > -SWING_AMPLITUDE_THRESHOLD:
+            print("Swing stopped. -> Halting walk.")
+            keyboard.release(Key.right)
+            is_walking = False
+            SWING_HISTORY.clear()
 
 # --- Main Program ---
 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -152,40 +83,31 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         data, addr = s.recvfrom(1024)
         message = data.decode().strip()
 
-        # Check if the message is sensor data
         if message.startswith("SENSOR:"):
             try:
-                # 1. PARSE the message to get the numbers
                 parts = message.replace("SENSOR:", "").split(',')
                 x = float(parts[0])
                 y = float(parts[1])
                 z = float(parts[2])
-
-                # 2. CALCULATE the magnitude of the acceleration
-                magnitude = math.sqrt(x**2 + y**2 + z**2)
-
-                # 3. CHECK for different gestures
                 current_time = time.time()
 
-                # PUNCH DETECTION (forward thrust)
-                if magnitude > PUNCH_THRESHOLD and (current_time - last_punch_time) > PUNCH_COOLDOWN_S:
-                    print(f"PUNCH DETECTED! (Magnitude: {magnitude:.2f}) -> Pressing 'X'")
+                # PUNCH DETECTION (strong forward thrust = negative Z)
+                if z < -PUNCH_THRESHOLD and (current_time - last_punch_time) > PUNCH_COOLDOWN_S:
+                    print(f"PUNCH DETECTED! (Z-axis: {z:.2f}) -> Pressing 'x'")
                     keyboard.press('x')
                     keyboard.release('x')
                     last_punch_time = current_time
 
-                # JUMP DETECTION (upward jerk)
+                # JUMP DETECTION (strong upward jerk = positive Y)
                 elif y > JUMP_THRESHOLD and (current_time - last_jump_time) > JUMP_COOLDOWN_S:
                     print(f"JUMP DETECTED! (Y-axis: {y:.2f}) -> Pressing SPACE")
-                    keyboard.press(Key.space)
-                    keyboard.release(Key.space)
+                    keyboard.press('z')
+                    keyboard.release('z')
                     last_jump_time = current_time
 
-                # TURN AROUND DETECTION (quick X-axis change)
-                elif not detect_turn_around(x):
-                    # WALKING DETECTION (only if not turning around)
-                    handle_walking(x)
+                # WALKING DETECTION (rhythmic forward/backward swing on Z axis)
+                else:
+                    handle_rhythmic_walking(z)
 
             except (ValueError, IndexError):
-                # If the message is malformed, just ignore it and continue
                 pass
