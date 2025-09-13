@@ -20,6 +20,8 @@ facing_right = True
 is_walking = False
 total_rotation = 0.0
 last_time = time.time()
+current_state = None  # Track the current confirmed state
+state_samples = []    # Buffer recent gravity readings for stability
 
 print("✅ State-Aware Controller is running.")
 print("="*50)
@@ -56,12 +58,42 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                     delta_time = current_time - last_time
                     last_time = current_time
 
-                    # --- State Detection ---
-                    state = None
-                    if abs(x) > GRAVITY_THRESHOLD:
-                        state = "WALKING"
-                    elif abs(y) > GRAVITY_THRESHOLD:
-                        state = "COMBAT"
+                    # --- State Detection with Stability ---
+                    # Use a more sophisticated approach that considers recent readings
+                    # and doesn't change state based on temporary gesture spikes
+                    
+                    # Add current reading to buffer (keep last 5 readings)
+                    state_samples.append((x, y))
+                    if len(state_samples) > 5:
+                        state_samples.pop(0)
+                    
+                    # Calculate average gravity readings (ignoring extreme spikes)
+                    if len(state_samples) >= 3:
+                        # Remove the highest and lowest to filter spikes
+                        x_values = [abs(sample[0]) for sample in state_samples]
+                        y_values = [abs(sample[1]) for sample in state_samples]
+                        x_values.sort()
+                        y_values.sort()
+                        # Use middle values
+                        avg_x = sum(x_values[1:-1]) / max(1, len(x_values) - 2)
+                        avg_y = sum(y_values[1:-1]) / max(1, len(y_values) - 2)
+                        
+                        # Determine state based on stable gravity readings
+                        if avg_x > 8.0 and avg_x > avg_y + 2.0:
+                            new_state = "WALKING"
+                        elif avg_y > 8.0 and avg_y > avg_x + 2.0:
+                            new_state = "COMBAT"
+                        else:
+                            new_state = current_state  # Keep current state if unclear
+                        
+                        # Only change state if we have a clear reading or no current state
+                        if current_state is None or new_state != current_state:
+                            if new_state in ["WALKING", "COMBAT"]:
+                                current_state = new_state
+                        
+                        state = current_state
+                    else:
+                        state = current_state  # Keep current state until we have enough samples
 
                     # --- Rotation Tracking ---
                     total_rotation += gyro_y * delta_time
