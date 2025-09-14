@@ -44,7 +44,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     // --- Throttling Variables ---
     private var lastSendTime: Long = 0
-    private val sendIntervalMs: Long = 30 // Send data roughly 33 times a second.
+    private val SEND_INTERVAL_MS: Long = 30 // Send data roughly 33 times a second.
 
     // This function is called when the activity is first created. [2]
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -74,7 +74,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             if (!isStarted) {
                 val ipAddressStr = ipAddressEditText.text.toString()
                 if (ipAddressStr.isBlank()) {
-                    statusTextView.text = getString(R.string.enter_ip_message)
+                    statusTextView.text = "Status: Please enter an IP address."
                     return@setOnClickListener
                 }
                 startController(ipAddressStr) // Start the controller logic.
@@ -92,8 +92,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 udpSocket = DatagramSocket() // Create the UDP socket. [2]
                 isStarted = true
                 Log.d("UDP", "UDP socket created successfully")
-                runOnUiThread { // UI updates must happen on the main thread.
-                    controlButton.text = getString(R.string.stop_button)
+                runOnUiThread { 
+                    controlButton.text = "Stop"
                     ipAddressEditText.isEnabled = false // Disable IP field while running.
                     
                     // ADD THIS LINE: Keep the screen on to prevent phone from sleeping
@@ -110,7 +110,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             } catch (e: Exception) {
                 e.printStackTrace()
                 Log.e("UDP", "Error starting controller: ${e.message}")
-                runOnUiThread { statusTextView.text = getString(R.string.network_error_message) }
+                runOnUiThread { statusTextView.text = "Status: Invalid IP or network error." }
             }
         }
     }
@@ -123,8 +123,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             udpSocket = null
         }
         runOnUiThread {
-            controlButton.text = getString(R.string.start_button)
-            statusTextView.text = getString(R.string.disconnected_status)
+            controlButton.text = "Start"
+            statusTextView.text = "Status: Disconnected"
             ipAddressEditText.isEnabled = true
             
             // ADD THIS LINE: Allow the screen to sleep again when stopped
@@ -139,7 +139,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         when (event.sensor.type) {
             Sensor.TYPE_ACCELEROMETER -> {
                 val currentTime = System.currentTimeMillis()
-                if ((currentTime - lastSendTime) > sendIntervalMs) { // Throttling check.
+                if ((currentTime - lastSendTime) > SEND_INTERVAL_MS) { // Throttling check.
                     lastSendTime = currentTime
 
                     val xAxis = event.values[0]
@@ -156,11 +156,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     }
 
                     runOnUiThread {
-                        val statusMessage = getString(R.string.running_status_format,
-                            String.format(Locale.US, "%.2f", xAxis),
-                            String.format(Locale.US, "%.2f", yAxis),
-                            String.format(Locale.US, "%.2f", zAxis))
-                        statusTextView.text = statusMessage
+                        statusTextView.text = "Status: Running\n\nX: ${String.format(Locale.US, "%.2f", xAxis)}\nY: ${String.format(Locale.US, "%.2f", yAxis)}\nZ: ${String.format(Locale.US, "%.2f", zAxis)}"
                     }
                 }
             }
