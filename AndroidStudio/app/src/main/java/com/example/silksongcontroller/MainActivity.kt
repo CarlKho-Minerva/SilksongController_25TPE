@@ -200,41 +200,90 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
 
     private fun updateDashboard() {
-        // Determine state based on accelerometer (similar to Python logic)
-        currentState = when {
+        // Determine state based on accelerometer (similar to Python logic with stability buffer)
+        val rawState = when {
             kotlin.math.abs(accelData[1]) > 9.0f -> "COMBAT"
             kotlin.math.abs(accelData[0]) > 9.0f -> "WALKING"
             else -> "IDLE"
         }
+        
+        // Simple state tracking for display (similar to Python but simplified for Android)
+        currentState = rawState
 
-        // Calculate facing direction from gyro data
-        facingDirection = if (gyroData[1] < 1.57f) "RIGHT" else "LEFT"
-        rotationDegrees = Math.toDegrees(gyroData[1].toDouble()).toFloat()
+        // Calculate facing direction and rotation from gyro data (similar to Python logic)
+        val totalRotation = gyroData[1] // Simplified - in real app this would accumulate over time
+        facingDirection = if (totalRotation < 1.57f) "RIGHT" else "LEFT"
+        rotationDegrees = Math.toDegrees(totalRotation.toDouble()).toFloat()
 
-        // Create comprehensive dashboard display with ALL sensor data
+        // Calculate jerk force for more accurate action detection (similar to Python)
+        val magnitude = kotlin.math.sqrt(accelData[0]*accelData[0] + accelData[1]*accelData[1] + accelData[2]*accelData[2])
+        val jerkForce = magnitude - 9.81f
+        
+        // Enhanced airborne detection (matching Python logic)
+        val isAirborne = magnitude in 8.5f..11.5f
+        val airborneStatus = if (isAirborne) "AIRBORNE" else "GROUNDED"
+        
+        // Update last action based on jerk force and enhanced detection
+        when (currentState) {
+            "COMBAT" -> {
+                if (jerkForce > 10.0f) { // Using default punch threshold
+                    lastAction = "PUNCH"
+                    lastActionValue = jerkForce
+                }
+            }
+            "WALKING" -> {
+                if (kotlin.math.abs(accelData[2]) > 3.0f) { // Walking swing detected
+                    lastAction = "WALK_SWING"
+                    lastActionValue = kotlin.math.abs(accelData[2])
+                }
+                if (jerkForce > 12.0f) { // Jump threshold
+                    lastAction = if (isAirborne) "JUMP_AIRBORNE" else "JUMP_START"
+                    lastActionValue = jerkForce
+                }
+            }
+        }
+
+        // Create comprehensive dashboard display matching console format
         val dashboardText = """
-            ╔═══ SILKSONG CONTROLLER DASHBOARD ═══╗
-            ║ STATE: $currentState
-            ║ FACING: $facingDirection (${String.format("%.0f", rotationDegrees)}°)
-            ║ LAST ACTION: $lastAction (${String.format("%.1f", lastActionValue)})
-            ╠════════════════════════════════════╣
-            ║ ACCELEROMETER:
-            ║   X: ${String.format("%6.2f", accelData[0])} (Forward/Back)
-            ║   Y: ${String.format("%6.2f", accelData[1])} (Left/Right)
-            ║   Z: ${String.format("%6.2f", accelData[2])} (Up/Down)
-            ║ GYROSCOPE:
-            ║   X: ${String.format("%6.2f", gyroData[0])} (Pitch)
-            ║   Y: ${String.format("%6.2f", gyroData[1])} (Yaw)
-            ║   Z: ${String.format("%6.2f", gyroData[2])} (Roll)
-            ║ LINEAR ACCELERATION:
-            ║   X: ${String.format("%6.2f", linearAccelData[0])} (Device motion)
-            ║   Y: ${String.format("%6.2f", linearAccelData[1])} (Device motion)
-            ║   Z: ${String.format("%6.2f", linearAccelData[2])} (Device motion)
-            ║ GRAVITY:
-            ║   X: ${String.format("%6.2f", gravityData[0])} (Earth gravity)
-            ║   Y: ${String.format("%6.2f", gravityData[1])} (Earth gravity)
-            ║   Z: ${String.format("%6.2f", gravityData[2])} (Earth gravity)
-            ╚════════════════════════════════════╝
+══════════════════════════════════════════════
+ SILKSONG CONTROLLER DASHBOARD - LIVE DATA
+══════════════════════════════════════════════
+
+STATE: $currentState | FACING: $facingDirection (${String.format("%.0f", rotationDegrees)}°)
+LAST ACTION: $lastAction (${String.format("%.1f", lastActionValue)})
+AIRBORNE STATUS: $airborneStatus
+
+──────────────────────────────────────────────
+📱 RAW SENSOR DATA (All Axes):
+──────────────────────────────────────────────
+
+🎯 ACCELEROMETER (Motion + Gravity):
+   X: ${String.format("%7.2f", accelData[0])} m/s² (Forward/Back)
+   Y: ${String.format("%7.2f", accelData[1])} m/s² (Left/Right) 
+   Z: ${String.format("%7.2f", accelData[2])} m/s² (Up/Down)
+
+🔄 GYROSCOPE (Rotation Rate):
+   X: ${String.format("%7.3f", gyroData[0])} rad/s (Pitch)
+   Y: ${String.format("%7.3f", gyroData[1])} rad/s (Yaw)
+   Z: ${String.format("%7.3f", gyroData[2])} rad/s (Roll)
+
+🎯 LINEAR ACCELERATION (Pure Motion):
+   X: ${String.format("%7.2f", linearAccelData[0])} m/s² 
+   Y: ${String.format("%7.2f", linearAccelData[1])} m/s²
+   Z: ${String.format("%7.2f", linearAccelData[2])} m/s²
+
+🌍 GRAVITY (Earth's Pull):
+   X: ${String.format("%7.2f", gravityData[0])} m/s²
+   Y: ${String.format("%7.2f", gravityData[1])} m/s²
+   Z: ${String.format("%7.2f", gravityData[2])} m/s²
+
+──────────────────────────────────────────────
+📊 COMPUTED VALUES:
+──────────────────────────────────────────────
+Total Magnitude: ${String.format("%.2f", magnitude)} m/s²
+Jerk Force: ${String.format("%.2f", jerkForce)} m/s²
+Airborne Range: 8.5 - 11.5 m/s² (Current: ${String.format("%.2f", magnitude)})
+══════════════════════════════════════════════
         """.trimIndent()
 
         statusTextView.text = dashboardText
