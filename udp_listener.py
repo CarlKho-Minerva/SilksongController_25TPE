@@ -144,7 +144,34 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         if message.startswith("SENSOR:"):
             try:
                 parts = message.replace("SENSOR:", "").split(',')
-                x, y, z, gyro_y = [float(p) for p in parts]
+
+                # NEW COMPREHENSIVE SENSOR DATA FORMAT (12 values total)
+                # accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z,
+                # linear_accel_x, linear_accel_y, linear_accel_z,
+                # gravity_x, gravity_y, gravity_z
+                if len(parts) == 12:
+                    # Parse all 12 sensor values
+                    accel_x, accel_y, accel_z = [float(parts[i])
+                                                 for i in range(3)]
+                    gyro_x, gyro_y, gyro_z = [float(parts[i])
+                                              for i in range(3, 6)]
+                    linear_accel_x, linear_accel_y, linear_accel_z = [
+                        float(parts[i]) for i in range(6, 9)]
+                    gravity_x, gravity_y, gravity_z = [float(parts[i])
+                                                      for i in range(9, 12)]
+
+                    # Use main accelerometer data for motion detection
+                    x, y, z = accel_x, accel_y, accel_z
+                elif len(parts) == 4:
+                    # LEGACY FORMAT: accel_x, accel_y, accel_z, gyro_y
+                    x, y, z, gyro_y = [float(p) for p in parts]
+                    # Default values for missing gyro axes
+                    gyro_x = gyro_z = 0.0
+                    linear_accel_x = linear_accel_y = linear_accel_z = 0.0
+                    gravity_x = gravity_y = gravity_z = 0.0
+                else:
+                    print(f"⚠️ Unknown sensor data format: {len(parts)} values")
+                    continue
 
                 # --- Set Initial "Forward" Direction ---
                 if initial_gyro_heading is None:
