@@ -129,9 +129,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             }
         }
     }
-    
+
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-    
+
     override fun onPause() {
         super.onPause()
         if (isStarted) stopController()
