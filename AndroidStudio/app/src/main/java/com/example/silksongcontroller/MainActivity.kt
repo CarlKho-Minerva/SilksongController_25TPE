@@ -45,11 +45,15 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main) // Your XML layout from the previous step
+        setContentView(R.layout.activity_main)
 
         ipAddressEditText = findViewById(R.id.ipAddressEditText)
         controlButton = findViewById(R.id.controlButton)
         statusTextView = findViewById(R.id.statusTextView)
+
+        // Set initial UI state
+        controlButton.text = getString(R.string.start_button)
+        statusTextView.text = getString(R.string.status_disconnected)
 
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
@@ -64,21 +68,31 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
 
     private fun startController(ipStr: String) {
-        if (ipStr.isBlank()) return
+        if (ipStr.isBlank()) {
+            statusTextView.text = getString(R.string.enter_ip_message)
+            return
+        }
+        
         isStarted = true
         coroutineScope.launch {
             try {
                 targetAddress = InetAddress.getByName(ipStr)
                 udpSocket = DatagramSocket()
                 runOnUiThread {
-                    controlButton.text = "Stop"
+                    controlButton.text = getString(R.string.stop_button)
+                    statusTextView.text = "Status: Connecting..."
                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
+                
                 // Register all sensors
                 sensorManager.registerListener(this@MainActivity, accelerometer, SensorManager.SENSOR_DELAY_GAME)
                 sensorManager.registerListener(this@MainActivity, gyroscope, SensorManager.SENSOR_DELAY_GAME)
                 sensorManager.registerListener(this@MainActivity, linearAccelerometer, SensorManager.SENSOR_DELAY_GAME)
                 sensorManager.registerListener(this@MainActivity, gravitySensor, SensorManager.SENSOR_DELAY_GAME)
+
+                runOnUiThread {
+                    statusTextView.text = "Status: Connected\nSending sensor data..."
+                }
 
                 // Start the sending loop
                 while (isStarted) {
@@ -86,7 +100,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     delay(SEND_INTERVAL_MS)
                 }
             } catch (e: Exception) {
-                runOnUiThread { stopController() }
+                runOnUiThread { 
+                    statusTextView.text = getString(R.string.network_error_message)
+                    stopController() 
+                }
             }
         }
     }
@@ -96,7 +113,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         sensorManager.unregisterListener(this)
         coroutineScope.launch { udpSocket?.close() }
         runOnUiThread {
-            controlButton.text = "Start"
+            controlButton.text = getString(R.string.start_button)
+            statusTextView.text = getString(R.string.disconnected_status)
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
@@ -104,10 +122,26 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     override fun onSensorChanged(event: SensorEvent?) {
         // Just store the latest data from whichever sensor updated
         when (event?.sensor?.type) {
-            Sensor.TYPE_ACCELEROMETER -> System.arraycopy(event.values, 0, accelData, 0, 3)
+            Sensor.TYPE_ACCELEROMETER -> {
+                System.arraycopy(event.values, 0, accelData, 0, 3)
+                updateSensorDisplay()
+            }
             Sensor.TYPE_GYROSCOPE -> System.arraycopy(event.values, 0, gyroData, 0, 3)
             Sensor.TYPE_LINEAR_ACCELERATION -> System.arraycopy(event.values, 0, linearAccelData, 0, 3)
             Sensor.TYPE_GRAVITY -> System.arraycopy(event.values, 0, gravityData, 0, 3)
+        }
+    }
+    
+    private fun updateSensorDisplay() {
+        if (isStarted) {
+            runOnUiThread {
+                val statusText = getString(R.string.running_status_format,
+                    String.format("%.2f", accelData[0]),
+                    String.format("%.2f", accelData[1]),
+                    String.format("%.2f", accelData[2])
+                )
+                statusTextView.text = statusText
+            }
         }
     }
 
@@ -125,7 +159,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 val packet = DatagramPacket(buffer, buffer.size, targetAddress, TARGET_PORT)
                 udpSocket?.send(packet)
             } catch (e: Exception) {
-                // Handle exceptions
+                // If network error occurs, stop the controller
+                runOnUiThread {
+                    statusTextView.text = "Status: Network error - ${e.message}"
+                    stopController()
+                }
             }
         }
     }
