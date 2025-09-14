@@ -1,18 +1,19 @@
 import socket
 import time
 import statistics
+import math
 
 HOST_IP = '0.0.0.0'
 PORT = 12345
+GRAVITY_CONSTANT = 9.8
 
-def get_gesture_data(duration=3):
-    """Listens for sensor data for a fixed duration and returns all readings."""
+def get_gesture_data(duration=10):
+    """Listens for sensor data and returns all readings."""
+    print("  Recording...")
     readings = []
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.bind((HOST_IP, PORT))
-        s.settimeout(0.1) # Don't block forever
-        
-        print("  Recording...")
+        s.settimeout(0.1)
         start_time = time.time()
         while time.time() - start_time < duration:
             try:
@@ -28,47 +29,41 @@ def get_gesture_data(duration=3):
     return readings
 
 def calibrate_punch():
-    input("\n--- Calibrating PUNCH (Vertical Stance) ---\nHold phone vertically. Press Enter, then perform 5 punches...")
-    data = get_gesture_data(10) # 10 seconds to do 5 punches
-    x_peaks = [abs(row[0]) for row in data if abs(row[1]) > 9.0] # Only consider data when phone is vertical
-    x_peaks.sort(reverse=True)
-    threshold = statistics.mean(x_peaks[:5]) * 0.8 # Average of top 5 peaks
+    input("\n--- Calibrating PUNCH (Vertical Stance) ---\nHold phone vertically. Press Enter, then perform 5 forward punches...")
+    data = get_gesture_data()
+    # A punch is a spike on the X-axis while the Y-axis feels gravity
+    punch_forces = [abs(row[0]) for row in data if abs(row[1]) > (GRAVITY_CONSTANT - 2.0)]
+    punch_forces.sort(reverse=True)
+    # Average the top 5 distinct force readings
+    threshold = statistics.mean(punch_forces[:5]) * 0.8
     return threshold
 
 def calibrate_jump():
-    input("\n--- Calibrating JUMP (Horizontal Stance) ---\nHold phone horizontally. Press Enter, then perform 5 jumps...")
-    data = get_gesture_data(10)
-    x_peaks = [abs(row[0]) for row in data if abs(row[0]) > 9.0] # Only consider vertical G-force in horizontal state
-    x_peaks.sort(reverse=True)
-    threshold = statistics.mean(x_peaks[:5]) * 0.8
-    return threshold
+    input("\n--- Calibrating JUMP (Horizontal Stance) ---\nHold phone horizontally. Press Enter, then perform 5 upward jerks...")
+    data = get_gesture_data()
+    # A jump is a spike on the X-axis, which is already feeling gravity. We want the force ADDED to gravity.
+    # We calculate the magnitude of the force vector and subtract gravity to find the jerk force.
+    jump_forces = []
+    for row in data:
+        # Only measure when in a clear horizontal state
+        if abs(row[0]) > (GRAVITY_CONSTANT - 2.0):
+            magnitude = math.sqrt(row[0]**2 + row[1]**2 + row[2]**2)
+            jerk_force = magnitude - GRAVITY_CONSTANT
+            if jerk_force > 0:
+                jump_forces.append(jerk_force)
 
-def calibrate_walk():
-    input("\n--- Calibrating WALK (Horizontal Stance) ---\nHold phone horizontally and walk in place. Press Enter to start...")
-    data = get_gesture_data(10)
-    z_values = [row[2] for row in data]
-    gyro_y_values = [abs(row[3]) for row in data]
-    
-    amplitude = (max(z_values) - min(z_values)) / 2
-    gyro_noise = statistics.mean(gyro_y_values) * 1.5 # 150% of average noise
-    
-    return amplitude, gyro_noise
+    jump_forces.sort(reverse=True)
+    threshold = statistics.mean(jump_forces[:5]) * 0.8 if len(jump_forces) >= 5 else 10.0
+    return threshold
 
 if __name__ == "__main__":
     print("✅ Full Motion Profile Calibration")
-    print("Make sure your Android app is running and connected!")
-    
     punch_thresh = calibrate_punch()
     jump_thresh = calibrate_jump()
-    walk_amp, walk_gyro_noise = calibrate_walk()
 
     print("\n\n✅ Calibration Complete! ✅")
-    print("Copy the entire 'CALIBRATION_PROFILE' dictionary into your 'udp_listener.py' script:")
+    print("Copy the following configuration into your 'udp_listener.py' script:")
     print("--------------------------------------------------")
-    print("CALIBRATION_PROFILE = {")
-    print(f"    'PUNCH_THRESHOLD': {punch_thresh:.2f},")
-    print(f"    'JUMP_THRESHOLD': {jump_thresh:.2f},")
-    print(f"    'WALK_SWING_AMPLITUDE': {walk_amp:.2f},")
-    print(f"    'WALK_GYRO_NOISE_LIMIT': {walk_gyro_noise:.2f},")
-    print("}")
+    print(f"PUNCH_THRESHOLD = {punch_thresh:.2f}")
+    print(f"JUMP_THRESHOLD = {jump_thresh:.2f}")
     print("--------------------------------------------------")
