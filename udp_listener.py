@@ -4,10 +4,10 @@ from pynput.keyboard import Controller, Key
 
 # --- PASTE YOUR CALIBRATION PROFILE HERE ---
 CALIBRATION_PROFILE = {
-    'PUNCH_THRESHOLD': 10.0,
-    'JUMP_THRESHOLD': 12.0,
-    'WALK_SWING_AMPLITUDE': 3.0,
-    'WALK_GYRO_NOISE_LIMIT': 0.5,
+    'PUNCH_THRESHOLD': 21.38,
+    'JUMP_THRESHOLD': 24.10,
+    'WALK_SWING_AMPLITUDE': 4.88,
+    'WALK_GYRO_NOISE_LIMIT': 0.64,
 }
 # -------------------------------------------
 
@@ -39,7 +39,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             try:
                 parts = message.replace("SENSOR:", "").split(',')
                 x, y, z, gyro_y = [float(p) for p in parts]
-                
+
                 # --- Set Initial "Forward" Direction ---
                 if initial_gyro_heading is None:
                     initial_gyro_heading = gyro_y
@@ -69,7 +69,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                     elif abs(z) < CALIBRATION_PROFILE['WALK_SWING_AMPLITUDE'] and is_walking:
                         is_walking = False
                         print("🛑 WALKING STOP")
-                    
+
                     if is_walking:
                         direction_key = Key.right if total_rotation < 1.57 else Key.left # Right for +/- 90deg
                         keyboard.press(direction_key)
@@ -78,7 +78,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                     # JUMP (checks X-axis, as it's the vertical axis in this state)
                     if abs(x) > (GRAVITY_THRESHOLD + CALIBRATION_PROFILE['JUMP_THRESHOLD']):
                         print(f"⬆️ JUMP DETECTED (X-Force: {x:.2f})")
-                        keyboard.press(Key.space); keyboard.release(Key.space)
+                        keyboard.press('z'); keyboard.release('z')
                         last_action_time = current_time
 
                 elif state == "COMBAT":
@@ -89,6 +89,6 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                         print(f"👊 PUNCH DETECTED (X-Force: {x:.2f})")
                         keyboard.press('x'); keyboard.release('x')
                         last_action_time = current_time
-            
+
             except (ValueError, IndexError):
                 pass
