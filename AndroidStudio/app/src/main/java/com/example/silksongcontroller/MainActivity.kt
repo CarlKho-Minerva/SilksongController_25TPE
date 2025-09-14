@@ -32,9 +32,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var accelerometer: Sensor? = null
     private var gyroscope: Sensor? = null
     private var isStarted = false
-    
-    // Store the latest gyroscope data
+
+    // Store the latest sensor data for display
+    private var accelData = FloatArray(3)
     private var gyroData = FloatArray(3)
+
+    // Dashboard state variables
+    private var currentState = "IDLE"
+    private var facingDirection = "RIGHT"
+    private var rotationDegrees = 0.0f
+    private var lastAction = "NONE"
+    private var lastActionValue = 0.0f
 
     // --- Networking and Coroutine Variables ---
     private val coroutineScope = CoroutineScope(Dispatchers.IO) // Scope for background tasks. [1]
@@ -95,7 +103,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 runOnUiThread { // UI updates must happen on the main thread.
                     controlButton.text = getString(R.string.stop_button)
                     ipAddressEditText.isEnabled = false // Disable IP field while running.
-                    
+
                     // ADD THIS LINE: Keep the screen on to prevent phone from sleeping
                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
@@ -126,7 +134,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             controlButton.text = getString(R.string.start_button)
             statusTextView.text = getString(R.string.disconnected_status)
             ipAddressEditText.isEnabled = true
-            
+
             // ADD THIS LINE: Allow the screen to sleep again when stopped
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
@@ -145,6 +153,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     val xAxis = event.values[0]
                     val yAxis = event.values[1]
                     val zAxis = event.values[2]
+
+                    // Store accelerometer data for display
+                    accelData[0] = xAxis
+                    accelData[1] = yAxis
+                    accelData[2] = zAxis
+
                     val gyroY = gyroData[1] // Y-axis rotation (yaw)
 
                     // NEW MESSAGE FORMAT with gyroscope data
@@ -156,11 +170,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     }
 
                     runOnUiThread {
-                        val statusMessage = getString(R.string.running_status_format,
-                            String.format(Locale.US, "%.2f", xAxis),
-                            String.format(Locale.US, "%.2f", yAxis),
-                            String.format(Locale.US, "%.2f", zAxis))
-                        statusTextView.text = statusMessage
+                        updateDashboard()
                     }
                 }
             }
@@ -169,6 +179,39 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 System.arraycopy(event.values, 0, gyroData, 0, 3)
             }
         }
+    }
+
+    private fun updateDashboard() {
+        // Determine state based on accelerometer (similar to Python logic)
+        currentState = when {
+            kotlin.math.abs(accelData[1]) > 9.0f -> "COMBAT"
+            kotlin.math.abs(accelData[0]) > 9.0f -> "WALKING"
+            else -> "IDLE"
+        }
+
+        // Calculate facing direction from gyro data
+        facingDirection = if (gyroData[1] < 1.57f) "RIGHT" else "LEFT"
+        rotationDegrees = Math.toDegrees(gyroData[1].toDouble()).toFloat()
+
+        // Create comprehensive dashboard display
+        val dashboardText = """
+            ╔═══ SILKSONG CONTROLLER DASHBOARD ═══╗
+            ║ STATE: $currentState
+            ║ FACING: $facingDirection (${String.format("%.0f", rotationDegrees)}°)
+            ║ LAST ACTION: $lastAction (${String.format("%.1f", lastActionValue)})
+            ╠════════════════════════════════════╣
+            ║ ACCELEROMETER:
+            ║   X: ${String.format("%6.2f", accelData[0])} (Forward/Back)
+            ║   Y: ${String.format("%6.2f", accelData[1])} (Left/Right)
+            ║   Z: ${String.format("%6.2f", accelData[2])} (Up/Down)
+            ║ GYROSCOPE:
+            ║   X: ${String.format("%6.2f", gyroData[0])} (Pitch)
+            ║   Y: ${String.format("%6.2f", gyroData[1])} (Yaw)
+            ║   Z: ${String.format("%6.2f", gyroData[2])} (Roll)
+            ╚════════════════════════════════════╝
+        """.trimIndent()
+
+        statusTextView.text = dashboardText
     }
 
     private fun sendUdpMessage(message: String) {
