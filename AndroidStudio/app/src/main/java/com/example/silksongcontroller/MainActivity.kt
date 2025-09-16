@@ -26,14 +26,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var sensorManager: SensorManager
     private var accelerometer: Sensor? = null
     private var gyroscope: Sensor? = null
-    private var linearAccelerometer: Sensor? = null
-    private var gravitySensor: Sensor? = null
 
-    // Data storage for each sensor type
+    // Data storage for required sensor types
     private val accelData = FloatArray(3)
     private val gyroData = FloatArray(3)
-    private val linearAccelData = FloatArray(3)
-    private val gravityData = FloatArray(3)
 
     private var isStarted = false
     private val coroutineScope = CoroutineScope(Dispatchers.IO)
@@ -54,8 +50,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-        linearAccelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
-        gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
 
         controlButton.setOnClickListener {
             if (!isStarted) startController(ipAddressEditText.text.toString())
@@ -74,11 +68,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     controlButton.text = "Stop"
                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
-                // Register all sensors
+                // Register required sensors only
                 sensorManager.registerListener(this@MainActivity, accelerometer, SensorManager.SENSOR_DELAY_GAME)
                 sensorManager.registerListener(this@MainActivity, gyroscope, SensorManager.SENSOR_DELAY_GAME)
-                sensorManager.registerListener(this@MainActivity, linearAccelerometer, SensorManager.SENSOR_DELAY_GAME)
-                sensorManager.registerListener(this@MainActivity, gravitySensor, SensorManager.SENSOR_DELAY_GAME)
 
                 // Start the sending loop
                 while (isStarted) {
@@ -102,22 +94,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
-        // Just store the latest data from whichever sensor updated
+        // Store the latest data from whichever sensor updated
         when (event?.sensor?.type) {
             Sensor.TYPE_ACCELEROMETER -> System.arraycopy(event.values, 0, accelData, 0, 3)
             Sensor.TYPE_GYROSCOPE -> System.arraycopy(event.values, 0, gyroData, 0, 3)
-            Sensor.TYPE_LINEAR_ACCELERATION -> System.arraycopy(event.values, 0, linearAccelData, 0, 3)
-            Sensor.TYPE_GRAVITY -> System.arraycopy(event.values, 0, gravityData, 0, 3)
         }
     }
 
     private fun sendSensorData() {
-        // Construct a comprehensive message with all sensor data
+        // Send only the 4 values that Python expects: accel_x, accel_y, accel_z, gyro_y
         val message = "SENSOR:" +
-                "${accelData[0]},${accelData[1]},${accelData[2]}," +
-                "${gyroData[0]},${gyroData[1]},${gyroData[2]}," +
-                "${linearAccelData[0]},${linearAccelData[1]},${linearAccelData[2]}," +
-                "${gravityData[0]},${gravityData[1]},${gravityData[2]}"
+                "${accelData[0]},${accelData[1]},${accelData[2]},${gyroData[1]}"
 
         coroutineScope.launch {
             try {
@@ -129,9 +116,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             }
         }
     }
-    
+
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-    
+
     override fun onPause() {
         super.onPause()
         if (isStarted) stopController()
