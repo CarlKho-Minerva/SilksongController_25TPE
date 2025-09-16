@@ -36,9 +36,18 @@ state_buffer = deque(maxlen=5)  # Rolling buffer for state stability
 last_action = "NONE"
 last_action_value = 0.0
 
-def update_status_display(state, facing_dir, rotation_deg, last_action, last_value):
-    """Display clean, single-line status update"""
-    print(f"\rSTATE: {state:7} | FACING: {facing_dir} ({rotation_deg:4.0f}°) | LAST ACTION: {last_action} ({last_value:.1f})", end="", flush=True)
+def update_status_display(state, facing_dir, rotation_deg, last_action, last_value, current_sensors=None):
+    """Display clean, single-line status update with enhanced jump info"""
+    
+    # Enhanced status for jump actions
+    jump_status = ""
+    if jump_key_pressed and current_sensors:
+        x, y, z = current_sensors
+        total_acc = math.sqrt(x**2 + y**2 + z**2)
+        airborne = 8.5 < total_acc < 11.5
+        jump_status = f" | JUMP: {'AIRBORNE' if airborne else 'ACTIVE'} ({total_acc:.1f})"
+    
+    print(f"\rSTATE: {state:7} | FACING: {facing_dir} ({rotation_deg:4.0f}°) | LAST ACTION: {last_action} ({last_value:.1f}){jump_status}", end="", flush=True)
 
 def determine_state_from_sensors(x, y, z):
     """Determine raw state from sensor readings"""
@@ -71,12 +80,22 @@ def get_stable_state(raw_state, state_buffer):
 
 
 def manage_sustained_jump(x, y, z, jerk_force, jump_threshold):
-    """Handle sustained jump based on acceleration patterns"""
+    """Handle sustained jump based on acceleration patterns and airborne detection"""
     global jump_key_pressed, last_action, last_action_value, last_action_time
 
     total_acceleration = math.sqrt(x**2 + y**2 + z**2)
     current_time = time.time()
 
+    # ENHANCED AIRBORNE DETECTION
+    # When phone is truly suspended/floating, acceleration approaches pure gravity (~9.8)
+    # This detects when user is holding phone in air for extended jumps
+    airborne_threshold_low = 8.5   # Lower bound for airborne detection
+    airborne_threshold_high = 11.5  # Upper bound for airborne detection
+    is_airborne = airborne_threshold_low < total_acceleration < airborne_threshold_high
+    
+    # Also check for very low linear acceleration (indicates minimal device movement)
+    # This helps detect when phone is gently suspended rather than being moved rapidly
+    
     # JUMP START: Strong upward jerk detected
     if jerk_force > jump_threshold and not jump_key_pressed:
         keyboard.press('z')
@@ -86,22 +105,31 @@ def manage_sustained_jump(x, y, z, jerk_force, jump_threshold):
         last_action_time = current_time
         return "JUMP_START"
 
-    # JUMP CONTINUE: Low total acceleration indicates "airborne" state
-    # (When phone is suspended/floating, total acceleration approaches gravity)
-    elif jump_key_pressed and total_acceleration < 12.0:  # Slightly above gravity
+    # JUMP CONTINUE: Phone is in "airborne" state (suspended/floating)
+    # This allows for extended jumps when user holds phone in air
+    elif jump_key_pressed and is_airborne:
         # Keep holding jump key while "airborne"
         last_action = "JUMP_AIRBORNE"
         last_action_value = total_acceleration
         return "JUMP_CONTINUE"
 
-    # JUMP END: High acceleration spike indicates landing or strong movement
-    elif jump_key_pressed and (jerk_force > jump_threshold * 0.7 or total_acceleration > 15.0):
+    # JUMP END: High acceleration spike indicates landing, strong movement, or user lowered phone
+    elif jump_key_pressed and (jerk_force > jump_threshold * 0.6 or total_acceleration > 15.0 or total_acceleration < 7.0):
         keyboard.release('z')
         jump_key_pressed = False
         last_action = "JUMP_LAND"
         last_action_value = total_acceleration
         last_action_time = current_time
         return "JUMP_END"
+
+    # TIMEOUT SAFETY: Release jump after maximum reasonable time (prevent stuck keys)
+    elif jump_key_pressed and (current_time - last_action_time) > 3.0:
+        keyboard.release('z')
+        jump_key_pressed = False
+        last_action = "JUMP_TIMEOUT"
+        last_action_value = current_time - last_action_time
+        last_action_time = current_time
+        return "JUMP_TIMEOUT"
 
     return None
 
@@ -144,7 +172,34 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         if message.startswith("SENSOR:"):
             try:
                 parts = message.replace("SENSOR:", "").split(',')
-                x, y, z, gyro_y = [float(p) for p in parts]
+
+                # NEW COMPREHENSIVE SENSOR DATA FORMAT (12 values total)
+                # accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z,
+                # linear_accel_x, linear_accel_y, linear_accel_z,
+                # gravity_x, gravity_y, gravity_z
+                if len(parts) == 12:
+                    # Parse all 12 sensor values
+                    accel_x, accel_y, accel_z = [float(parts[i])
+                                                 for i in range(3)]
+                    gyro_x, gyro_y, gyro_z = [float(parts[i])
+                                              for i in range(3, 6)]
+                    linear_accel_x, linear_accel_y, linear_accel_z = [
+                        float(parts[i]) for i in range(6, 9)]
+                    gravity_x, gravity_y, gravity_z = [float(parts[i])
+                                                      for i in range(9, 12)]
+
+                    # Use main accelerometer data for motion detection
+                    x, y, z = accel_x, accel_y, accel_z
+                elif len(parts) == 4:
+                    # LEGACY FORMAT: accel_x, accel_y, accel_z, gyro_y
+                    x, y, z, gyro_y = [float(p) for p in parts]
+                    # Default values for missing gyro axes
+                    gyro_x = gyro_z = 0.0
+                    linear_accel_x = linear_accel_y = linear_accel_z = 0.0
+                    gravity_x = gravity_y = gravity_z = 0.0
+                else:
+                    print(f"⚠️ Unknown sensor data format: {len(parts)} values")
+                    continue
 
                 # --- Set Initial "Forward" Direction ---
                 if initial_gyro_heading is None:
@@ -178,7 +233,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                     # Still update status display even during cooldown
                     update_status_display(current_state, facing_dir,
                                          rotation_deg, last_action,
-                                         last_action_value)
+                                         last_action_value, (x, y, z))
                     continue
 
                 if current_state == "WALKING":
@@ -229,7 +284,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
 
                 # Update real-time status display
                 update_status_display(current_state, facing_dir, rotation_deg,
-                                     last_action, last_action_value)
+                                     last_action, last_action_value, (x, y, z))
 
             except (ValueError, IndexError):
                 pass
